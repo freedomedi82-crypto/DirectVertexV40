@@ -27,7 +27,7 @@ jobs:
           set -euo pipefail
 
           ZIP="$(find . -maxdepth 2 -type f \
-            -name -'DirectVertexV40_ANDROID_FINAL_CLOUD_GATED_FIXED.zip' \
+            -name 'DirectVertexV40_ANDROID_FINAL_CLOUD_GATED_FIXED.zip' \
             -print -quit)"
 
           if [ -z "$ZIP" ]; then
