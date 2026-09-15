@@ -73,8 +73,11 @@ jobs:
         with:
           gradle-version: "8.13"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+            - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+        
 
       - name: Install Android SDK components
         shell: bash
