@@ -2,6 +2,8 @@ name: DirectVertex V40 Final Gate
 
 on:
   workflow_dispatch:
+  issues:
+    types: [opened]
   push:
     branches:
       - main
