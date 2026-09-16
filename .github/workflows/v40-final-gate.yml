@@ -16,81 +16,50 @@ jobs:
   build-and-verify:
     runs-on: ubuntu-latest
     timeout-minutes: 75
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Extract final Android package
         shell: bash
         run: |
           set -euo pipefail
-          ZIP="$(find . -maxdepth 2 -type f \
-            -name 'DirectVertexV40_ANDROID_FINAL_CLOUD_GATED_FIXED_COMPOSE_OK.zip' \
-            -print -quit)"
-          if [ -z "$ZIP" ]; then
-            echo "ERROR: Final package ZIP not found."
-            find . -maxdepth 3 -type f | sort | head -200
-            exit 1
-          fi
+          ZIP="$(find . -maxdepth 2 -type f -name 'DirectVertexV40_ANDROID_FINAL_CLOUD_GATED_FIXED_COMPOSE_OK.zip' -print -quit)"
+          test -n "$ZIP"
           OVERRIDES="$(mktemp -d)"
           mkdir -p "$OVERRIDES/app/src/main/java/com/directvertex/v40"
           cp app/src/main/java/com/directvertex/v40/MainActivity.kt "$OVERRIDES/app/src/main/java/com/directvertex/v40/MainActivity.kt"
           cp app/src/main/java/com/directvertex/v40/V15VisionEngine.kt "$OVERRIDES/app/src/main/java/com/directvertex/v40/V15VisionEngine.kt"
           cp app/src/main/java/com/directvertex/v40/V29MarketDataIntegrity.kt "$OVERRIDES/app/src/main/java/com/directvertex/v40/V29MarketDataIntegrity.kt"
-          rm -rf extracted_v40
-          mkdir -p extracted_v40
+          rm -rf extracted_v40 && mkdir -p extracted_v40
           unzip -q "$ZIP" -d extracted_v40
           ROOT="$(find extracted_v40 -type f -name 'settings.gradle.kts' -print -quit | xargs -r dirname)"
-          if [ -z "$ROOT" ] || [ ! -f "$ROOT/settings.gradle.kts" ]; then
-            echo "ERROR: Android project root not found."
-            find extracted_v40 -maxdepth 5 -type f | sort | head -300
-            exit 1
-          fi
-          rsync -a --delete \
-            --exclude='.git/' \
-            --exclude='extracted_v40/' \
-            "$ROOT/" ./
+          test -n "$ROOT" && test -f "$ROOT/settings.gradle.kts"
+          rsync -a --delete --exclude='.git/' --exclude='extracted_v40/' "$ROOT/" ./
           cp "$OVERRIDES/app/src/main/java/com/directvertex/v40/MainActivity.kt" app/src/main/java/com/directvertex/v40/MainActivity.kt
           cp "$OVERRIDES/app/src/main/java/com/directvertex/v40/V15VisionEngine.kt" app/src/main/java/com/directvertex/v40/V15VisionEngine.kt
           cp "$OVERRIDES/app/src/main/java/com/directvertex/v40/V29MarketDataIntegrity.kt" app/src/main/java/com/directvertex/v40/V29MarketDataIntegrity.kt
           rm -rf "$OVERRIDES"
-          test -f settings.gradle.kts
-          test -d app
-          test -f app/build.gradle.kts
-          test -f app/src/main/java/com/directvertex/v40/MainActivity.kt
-          test -f app/src/main/java/com/directvertex/v40/V15VisionEngine.kt
-          test -f app/src/main/java/com/directvertex/v40/V29MarketDataIntegrity.kt
+          test -f settings.gradle.kts && test -d app && test -f app/build.gradle.kts
           echo "Project extracted and hotfixes restored successfully."
-
       - name: Set up Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
-
       - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.13"
-
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: ''
-
       - name: Install Android SDK components
         shell: bash
         run: |
           set -euo pipefail
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;35.0.0" \
-            "emulator" \
-            "system-images;android-30;google_apis;x86_64"
-
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;35.0.0" "emulator" "system-images;android-30;google_apis;x86_64"
       - name: Enable KVM acceleration
         shell: bash
         run: |
@@ -98,31 +67,24 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-          ls -l /dev/kvm
-          test -e /dev/kvm
-          test -r /dev/kvm
-          test -w /dev/kvm
-
+          test -e /dev/kvm && test -r /dev/kvm && test -w /dev/kvm
       - name: Static V40 preflight
         shell: bash
         run: |
           set -euo pipefail
           chmod +x scripts/verify_v40.sh
           bash scripts/verify_v40.sh
-
       - name: Gate 1 - Build debug APK
         shell: bash
         run: |
           set -euo pipefail
           gradle :app:assembleDebug --no-daemon --stacktrace
           APK="app/build/outputs/apk/debug/app-debug.apk"
-          test -f "$APK"
           test -s "$APK"
           ls -lh "$APK"
           sha256sum "$APK" | tee APK_SHA256.txt
           file "$APK"
           unzip -t "$APK" >/dev/null
-
       - name: Gate 2 - Android emulator install and launch
         uses: ReactiveCircus/android-emulator-runner@v2
         timeout-minutes: 25
@@ -140,37 +102,29 @@ jobs:
           emulator-boot-timeout: 600
           script: |
             set -eu
-            APK="app/build/outputs/apk/debug/app-debug.apk"
+            APK="$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk"
             PACKAGE="com.directvertex.v40"
             test -s "$APK"
             adb wait-for-device
             for i in $(seq 1 120); do
               STATE="$(adb get-state 2>/dev/null || true)"
               BOOT="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-              if [ "$STATE" = "device" ] && [ "$BOOT" = "1" ]; then
-                break
-              fi
+              if [ "$STATE" = "device" ] && [ "$BOOT" = "1" ]; then break; fi
               sleep 5
             done
             test "$(adb get-state)" = "device"
             test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1"
             adb install -r "$APK"
-            echo "Installed package:"
             adb shell pm path "$PACKAGE"
             adb shell monkey -p "$PACKAGE" 1
             sleep 8
-            echo "Package information:"
             adb shell dumpsys package "$PACKAGE" | head -100
-            echo "Running process check:"
             PID="$(adb shell pidof "$PACKAGE" | tr -d '\r' || true)"
             test -n "$PID"
             echo "PID=$PID"
-            echo "Recent app logcat:"
             adb logcat -d -t 400 | grep -iE "com.directvertex.v40|FATAL EXCEPTION|AndroidRuntime" | tail -160 || true
-            echo "Capturing emulator screenshot:"
-            adb exec-out screencap -p > emulator-screenshot.png
-            test -s emulator-screenshot.png
-
+            adb exec-out screencap -p > "$GITHUB_WORKSPACE/emulator-screenshot.png"
+            test -s "$GITHUB_WORKSPACE/emulator-screenshot.png"
       - name: Gate 3 - Final APK verification report
         shell: bash
         run: |
@@ -180,37 +134,17 @@ jobs:
           SIZE="$(stat -c%s "$APK")"
           cat > V40_APK_VERIFIED.txt <<EOF
           DirectVertex V40 APK VERIFIED
-
           Package: com.directvertex.v40
           Version: 40.0.0
           APK: app/build/outputs/apk/debug/app-debug.apk
           SHA-256: $SHA
           Size-bytes: $SIZE
-
-          Build:
-          Gradle: 8.13
-          Java: 17
-          compileSdk: 36
-          targetSdk: 36
-          minSdk: 23
-          Build Tools: 35.0.0
-
-          Emulator:
-          API: 30
-          Target: google_apis
-          Architecture: x86_64
-          KVM: enabled
-
-          Gates:
-          Gate 1 = APK build and integrity PASS
-          Gate 2 = Emulator install, launch, process and screenshot PASS
-          Gate 3 = Final verification report PASS
-
-          Generated at:
-          $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          Build: Gradle 8.13 / Java 17 / compileSdk 36 / targetSdk 36 / minSdk 23 / Build Tools 35.0.0
+          Emulator: API 30 / google_apis / x86_64 / KVM enabled
+          Gates: Gate 1 PASS; Gate 2 PASS; Gate 3 PASS
+          Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
           EOF
           cat V40_APK_VERIFIED.txt
-
       - name: Upload verified APK
         uses: actions/upload-artifact@v4
         with:
