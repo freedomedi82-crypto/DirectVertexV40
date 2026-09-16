@@ -15,7 +15,7 @@ permissions:
 jobs:
   build-and-verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 90
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -94,7 +94,7 @@ jobs:
           unzip -t "$APK" >/dev/null
       - name: Gate 2 - Android emulator install and launch
         shell: bash
-        timeout-minutes: 35
+        timeout-minutes: 65
         run: |
           set -euo pipefail
           APK="$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk"
@@ -178,21 +178,51 @@ jobs:
           fi
           test "$(adb -s emulator-5554 get-state)" = "device"
           test "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" = "1"
-          echo "Waiting for Android package manager..."
+          echo "Waiting for stable Android framework/package manager..."
           PM_READY=false
-          for i in $(seq 1 90); do
-            PM_STATE="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-            if [ "$PM_STATE" = "1" ] && adb -s emulator-5554 shell service check package 2>/dev/null | grep -q "found"; then PM_READY=true; break; fi
+          for i in $(seq 1 300); do
+            BOOT_STATE="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            PM_SERVICE="$(adb -s emulator-5554 shell service check package 2>/dev/null || true)"
+            SETTINGS_SERVICE="$(adb -s emulator-5554 shell service check settings 2>/dev/null || true)"
+            if [ "$BOOT_STATE" = "1" ] && printf '%s' "$PM_SERVICE" | grep -q "found" && printf '%s' "$SETTINGS_SERVICE" | grep -q "found"; then
+              if adb -s emulator-5554 shell cmd package list packages >/dev/null 2>&1; then
+                PM_READY=true
+                break
+              fi
+            fi
+            if [ $((i % 15)) -eq 0 ]; then echo "framework wait ${i}x2s: package=[$PM_SERVICE] settings=[$SETTINGS_SERVICE]"; fi
             sleep 2
           done
           if [ "$PM_READY" != "true" ]; then
-            echo "Android package manager did not become ready."
+            echo "Android framework/package manager did not become stable."
             adb -s emulator-5554 shell service check package || true
-            adb -s emulator-5554 logcat -d -t 400 | tail -300 || true
+            adb -s emulator-5554 shell service check settings || true
+            adb -s emulator-5554 logcat -d -t 800 | tail -500 || true
+            tail -400 "$GITHUB_WORKSPACE/emulator.log" || true
             exit 1
           fi
-          echo "Installing APK using push + pm install (avoids streamed-install transport failure)..."
+          echo "Installing APK using push + pm install..."
           adb -s emulator-5554 push "$APK" /data/local/tmp/directvertex-v40.apk
+          echo "Re-checking framework after 58MB APK transfer..."
+          POST_PUSH_READY=false
+          for i in $(seq 1 180); do
+            PM_SERVICE="$(adb -s emulator-5554 shell service check package 2>/dev/null || true)"
+            SETTINGS_SERVICE="$(adb -s emulator-5554 shell service check settings 2>/dev/null || true)"
+            if printf '%s' "$PM_SERVICE" | grep -q "found" && printf '%s' "$SETTINGS_SERVICE" | grep -q "found" && adb -s emulator-5554 shell cmd package list packages >/dev/null 2>&1; then
+              POST_PUSH_READY=true
+              break
+            fi
+            if [ $((i % 15)) -eq 0 ]; then echo "post-push framework wait ${i}x2s: package=[$PM_SERVICE] settings=[$SETTINGS_SERVICE]"; fi
+            sleep 2
+          done
+          if [ "$POST_PUSH_READY" != "true" ]; then
+            echo "Package manager became unavailable after APK transfer."
+            adb -s emulator-5554 shell service check package || true
+            adb -s emulator-5554 shell service check settings || true
+            adb -s emulator-5554 logcat -d -t 800 | tail -500 || true
+            tail -400 "$GITHUB_WORKSPACE/emulator.log" || true
+            exit 1
+          fi
           INSTALL_OK=false
           for attempt in 1 2 3; do
             if adb -s emulator-5554 shell pm install -r -t /data/local/tmp/directvertex-v40.apk; then INSTALL_OK=true; break; fi
@@ -203,23 +233,23 @@ jobs:
           if [ "$INSTALL_OK" != "true" ]; then
             echo "APK installation failed after retries."
             adb -s emulator-5554 shell service check package || true
-            adb -s emulator-5554 logcat -d -t 600 | tail -350 || true
-            tail -300 "$GITHUB_WORKSPACE/emulator.log" || true
+            adb -s emulator-5554 logcat -d -t 800 | tail -500 || true
+            tail -400 "$GITHUB_WORKSPACE/emulator.log" || true
             exit 1
           fi
           adb -s emulator-5554 shell rm -f /data/local/tmp/directvertex-v40.apk || true
           adb -s emulator-5554 shell pm path "$PACKAGE"
           adb -s emulator-5554 shell monkey -p "$PACKAGE" 1 >/tmp/directvertex-monkey.txt
-          sleep 12
+          sleep 15
           echo "Checking running process..."
           adb -s emulator-5554 shell dumpsys package "$PACKAGE" | head -120
           PID="$(adb -s emulator-5554 shell pidof "$PACKAGE" | tr -d '\r' || true)"
           test -n "$PID"
           echo "PID=$PID"
           echo "Checking fatal Android exceptions..."
-          if adb -s emulator-5554 logcat -d -t 600 | grep -iE "FATAL EXCEPTION|AndroidRuntime" | grep -q .; then
+          if adb -s emulator-5554 logcat -d -t 800 | grep -iE "FATAL EXCEPTION|AndroidRuntime" | grep -q .; then
             echo "Fatal Android exception detected."
-            adb -s emulator-5554 logcat -d -t 600 | tail -250
+            adb -s emulator-5554 logcat -d -t 800 | tail -300
             exit 1
           fi
           adb -s emulator-5554 exec-out screencap -p > "$GITHUB_WORKSPACE/emulator-screenshot.png"
