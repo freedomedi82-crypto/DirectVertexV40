@@ -139,7 +139,7 @@ jobs:
           disable-linux-hw-accel: false
           emulator-boot-timeout: 600
           script: |
-            set -euo pipefail
+            set -eu
             APK="app/build/outputs/apk/debug/app-debug.apk"
             PACKAGE="com.directvertex.v40"
             test -s "$APK"
