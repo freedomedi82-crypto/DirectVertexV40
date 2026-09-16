@@ -1,0 +1,2 @@
+Automated V40 verification trigger.
+Purpose: start the Final Gate workflow on main.
