@@ -24,11 +24,6 @@ data class V15VisionState(
     val rejectedFrames: Int
 )
 
-/**
- * Adaptive Vision Engine.
- * Robustifies noisy camera observations before they reach the signal layer.
- * Analysis-only: never places or executes trades.
- */
 class V15VisionEngine(
     private val maxHistory: Int = 20,
     private val jumpLimit: Double = 0.12,
@@ -56,26 +51,26 @@ class V15VisionEngine(
 
     private fun state(): V15VisionState {
         if (frames.isEmpty()) return V15VisionState(0.0, null, "UNKNOWN", 0.0, 0.0, 0.0, 0, rejected)
-        val list = frames.toList()
+        val list: List<V15Frame> = frames.toList()
         val weights = list.map { max(0.05, it.frameQuality) }
-        val wsum = weights.sum()
-        val stableY = list.zip(weights).sumOf { (f, w) -> f.chartY * w } / wsum
+        val wsum: Double = weights.sum()
+        val stableY: Double = list.zip(weights).sumOf { (f, w) -> f.chartY * w } / wsum
         val pw = list.filter { it.ocrPrice != null }
         val pweights = pw.map { max(0.05, it.frameQuality) }
-        val stablePrice = if (pw.isEmpty()) null else pw.zip(pweights).sumOf { (f, w) -> f.ocrPrice!! * w } / pweights.sum()
+        val stablePrice: Double? = if (pw.isEmpty()) null else pw.zip(pweights).sumOf { (f, w) -> f.ocrPrice!! * w } / pweights.sum()
         val half = max(1, list.size / 2)
-        val a = list.take(half).map { it.chartY }.average()
-        val b = list.takeLast(half).map { it.chartY }.average()
-        val momentum = a - b
-        val mean = list.map { it.chartY }.average()
-        val variance = list.map { (it.chartY - mean) * (it.chartY - mean) }.average()
-        val volatility = kotlin.math.sqrt(variance)
+        val a: Double = list.take(half).map { it.chartY }.average()
+        val b: Double = list.takeLast(half).map { it.chartY }.average()
+        val momentum: Double = a - b
+        val mean: Double = list.map { it.chartY }.average()
+        val variance: Double = list.map { (it.chartY - mean) * (it.chartY - mean) }.average()
+        val volatility: Double = kotlin.math.sqrt(variance)
         val trend = when {
             momentum > 0.015 -> "UP"
             momentum < -0.015 -> "DOWN"
             else -> "RANGE"
         }
-        val quality = list.map { it.frameQuality }.average()
+        val quality: Double = list.map { it.frameQuality }.average()
         return V15VisionState(stableY, stablePrice, trend, momentum, volatility, quality, list.size, rejected)
     }
 }
