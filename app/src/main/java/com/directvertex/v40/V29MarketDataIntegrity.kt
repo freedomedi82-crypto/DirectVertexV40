@@ -47,12 +47,14 @@ object V29MarketDataIntegrity {
         val jumpThreshold=maxOf(medRet*8.0,p95*1.5,0.0005)
         val jumps=returns.count { it>jumpThreshold }
         val targetMs=requestedExpirySeconds.toLong().coerceAtLeast(1L)*1000L
-        val steps=(if(medianInterval>0) kotlin.math.round(targetMs.toDouble()/medianInterval.toDouble()).toInt() else 3).coerceIn(1,120)
+        val steps=if(medianInterval>0) kotlin.math.round(targetMs.toDouble()/medianInterval.toDouble()).toInt().coerceIn(1,120) else 3
         val calibratedSeconds=((steps.toLong()*medianInterval)/1000L).toInt().coerceAtLeast(1)
         val continuity=when { cv<=0.25 -> 1.0; cv<=0.50 -> 0.8; cv<=1.0 -> 0.55; else -> 0.25 }
-        val jumpPenalty=(jumps.toDouble()/returns.size.toDouble().coerceAtLeast(1.0)).coerceAtMost(1.0)
-        val uniqueness=1.0-((dup+nonMono).toDouble()/points.size.toDouble().coerceAtLeast(1.0)).coerceIn(0.0,1.0)
-        val validity=clean.size.toDouble()/points.size.toDouble().coerceAtLeast(1.0)
+        val returnCount=if(returns.isEmpty()) 1.0 else returns.size.toDouble()
+        val pointCount=if(points.isEmpty()) 1.0 else points.size.toDouble()
+        val jumpPenalty=(jumps.toDouble()/returnCount).coerceAtMost(1.0)
+        val uniqueness=1.0-((dup+nonMono).toDouble()/pointCount).coerceIn(0.0,1.0)
+        val validity=clean.size.toDouble()/pointCount
         val coverage=((continuity*0.45)+(uniqueness*0.25)+(validity*0.20)+(1.0-jumpPenalty)*0.10).coerceIn(0.0,1.0)
         val issues=mutableListOf<String>()
         if(dup>0) issues += "DUPLICATE_TIMESTAMP=$dup"
