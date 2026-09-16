@@ -197,6 +197,9 @@ private fun Dashboard() {
             Text("${expirySeconds}s", modifier = Modifier.width(55.dp))
             OutlinedButton(onClick = { expirySeconds = (expirySeconds + 5).coerceAtMost(300) }) { Text("+") }
         }
+
+        QuotexOTCResearchPanel()
+
         Spacer(Modifier.height(2.dp))
         Text("CALL/PUT adalah sinyal analisis manual; aplikasi tidak mengeksekusi order otomatis.", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
     }
