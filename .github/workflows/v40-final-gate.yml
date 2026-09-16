@@ -30,6 +30,7 @@ jobs:
           cp app/src/main/java/com/directvertex/v40/MainActivity.kt "$OVERRIDES/app/src/main/java/com/directvertex/v40/MainActivity.kt"
           cp app/src/main/java/com/directvertex/v40/V15VisionEngine.kt "$OVERRIDES/app/src/main/java/com/directvertex/v40/V15VisionEngine.kt"
           cp app/src/main/java/com/directvertex/v40/V29MarketDataIntegrity.kt "$OVERRIDES/app/src/main/java/com/directvertex/v40/V29MarketDataIntegrity.kt"
+          cp app/src/main/java/com/directvertex/v40/QuotexOTCResearchRecorder.kt "$OVERRIDES/app/src/main/java/com/directvertex/v40/QuotexOTCResearchRecorder.kt"
           rm -rf extracted_v40 && mkdir -p extracted_v40
           unzip -q "$ZIP" -d extracted_v40
           ROOT="$(find extracted_v40 -type f -name 'settings.gradle.kts' -print -quit | xargs -r dirname)"
@@ -38,6 +39,7 @@ jobs:
           cp "$OVERRIDES/app/src/main/java/com/directvertex/v40/MainActivity.kt" app/src/main/java/com/directvertex/v40/MainActivity.kt
           cp "$OVERRIDES/app/src/main/java/com/directvertex/v40/V15VisionEngine.kt" app/src/main/java/com/directvertex/v40/V15VisionEngine.kt
           cp "$OVERRIDES/app/src/main/java/com/directvertex/v40/V29MarketDataIntegrity.kt" app/src/main/java/com/directvertex/v40/V29MarketDataIntegrity.kt
+          cp "$OVERRIDES/app/src/main/java/com/directvertex/v40/QuotexOTCResearchRecorder.kt" app/src/main/java/com/directvertex/v40/QuotexOTCResearchRecorder.kt
           rm -rf "$OVERRIDES"
           test -f settings.gradle.kts && test -d app && test -f app/build.gradle.kts
           echo "Project extracted and hotfixes restored successfully."
