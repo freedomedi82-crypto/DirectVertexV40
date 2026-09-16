@@ -64,6 +64,22 @@ jobs:
           set -euo pipefail
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "platforms;android-36" "build-tools;35.0.0" "emulator" "system-images;android-30;google_apis;x86_64"
+      - name: Enable KVM acceleration
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo groupadd -r kvm 2>/dev/null || true
+          sudo usermod -aG kvm "$USER" 2>/dev/null || true
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+          sudo chmod 666 /dev/kvm 2>/dev/null || true
+          ls -l /dev/kvm 2>/dev/null || true
+          if [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            echo "KVM permission setup succeeded."
+          else
+            echo "KVM is not writable after permission setup; Gate 2 will fail rather than silently claim accelerated verification."
+          fi
       - name: Detect KVM acceleration
         shell: bash
         run: |
@@ -103,7 +119,11 @@ jobs:
           AVD_ROOT="$HOME/.android/avd"
           AVD_DIR="$AVD_ROOT/$AVD.avd"
           test -s "$APK"
-          echo "Preparing Android API 30 emulator..."
+          if [ "${KVM_AVAILABLE:-false}" != "true" ]; then
+            echo "Gate 2 requires writable /dev/kvm for reliable x86_64 verification; KVM is unavailable."
+            exit 1
+          fi
+          echo "Preparing Android API 30 emulator with KVM acceleration..."
           mkdir -p "$AVD_ROOT"
           rm -rf "$AVD_DIR" "$AVD_ROOT/$AVD.ini"
           mkdir -p "$AVD_DIR"
@@ -152,15 +172,13 @@ jobs:
           EOF
           test -f "$AVD_DIR/config.ini"
           echo "Deterministic AVD created at $AVD_DIR"
-          if [ "${KVM_AVAILABLE:-false}" = "true" ]; then ACCEL="on"; else ACCEL="off"; fi
-          echo "Launching emulator with accel=$ACCEL"
-          nohup "$ANDROID_HOME/emulator/emulator" -avd "$AVD" -port 5554 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -wipe-data -accel "$ACCEL" > "$GITHUB_WORKSPACE/emulator.log" 2>&1 &
+          nohup "$ANDROID_HOME/emulator/emulator" -avd "$AVD" -port 5554 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -wipe-data -accel on > "$GITHUB_WORKSPACE/emulator.log" 2>&1 &
           EMU_PID=$!
           trap 'adb -s emulator-5554 emu kill >/dev/null 2>&1 || true; kill "$EMU_PID" >/dev/null 2>&1 || true' EXIT
           adb start-server >/dev/null
           echo "Waiting for emulator/ADB..."
           BOOT_OK=false
-          for i in $(seq 1 420); do
+          for i in $(seq 1 240); do
             STATE="$(adb -s emulator-5554 get-state 2>/dev/null || true)"
             BOOT="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
             if [ "$STATE" = "device" ] && [ "$BOOT" = "1" ]; then BOOT_OK=true; break; fi
@@ -180,7 +198,7 @@ jobs:
           test "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" = "1"
           echo "Waiting for stable Android framework/package manager..."
           PM_READY=false
-          for i in $(seq 1 300); do
+          for i in $(seq 1 180); do
             BOOT_STATE="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
             PM_SERVICE="$(adb -s emulator-5554 shell service check package 2>/dev/null || true)"
             SETTINGS_SERVICE="$(adb -s emulator-5554 shell service check settings 2>/dev/null || true)"
@@ -203,16 +221,15 @@ jobs:
           fi
           echo "Installing APK using push + pm install..."
           adb -s emulator-5554 push "$APK" /data/local/tmp/directvertex-v40.apk
-          echo "Re-checking framework after 58MB APK transfer..."
+          echo "Re-checking framework after APK transfer..."
           POST_PUSH_READY=false
-          for i in $(seq 1 180); do
+          for i in $(seq 1 90); do
             PM_SERVICE="$(adb -s emulator-5554 shell service check package 2>/dev/null || true)"
             SETTINGS_SERVICE="$(adb -s emulator-5554 shell service check settings 2>/dev/null || true)"
             if printf '%s' "$PM_SERVICE" | grep -q "found" && printf '%s' "$SETTINGS_SERVICE" | grep -q "found" && adb -s emulator-5554 shell cmd package list packages >/dev/null 2>&1; then
               POST_PUSH_READY=true
               break
             fi
-            if [ $((i % 15)) -eq 0 ]; then echo "post-push framework wait ${i}x2s: package=[$PM_SERVICE] settings=[$SETTINGS_SERVICE]"; fi
             sleep 2
           done
           if [ "$POST_PUSH_READY" != "true" ]; then
@@ -272,7 +289,7 @@ jobs:
           SHA-256: $SHA
           Size-bytes: $SIZE
           Build: Gradle 8.13 / Java 17 / compileSdk 36 / targetSdk 36 / minSdk 23 / Build Tools 35.0.0
-          Emulator: API 30 / google_apis / x86_64 / software-compatible verification
+          Emulator: API 30 / google_apis / x86_64 / KVM hardware-accelerated verification
           Gates: Gate 1 PASS; Gate 2 PASS; Gate 3 PASS
           APK ZIP integrity: PASS
           Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
