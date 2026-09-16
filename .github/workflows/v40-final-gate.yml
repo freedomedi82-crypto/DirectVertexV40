@@ -101,39 +101,29 @@ jobs:
           PACKAGE="com.directvertex.v40"
           AVD="directvertex-v40"
           test -s "$APK"
-
           echo "Preparing Android API 30 emulator..."
           if [ ! -d "$ANDROID_HOME/system-images/android-30/google_apis/x86_64" ]; then
             yes | sdkmanager --licenses >/dev/null || true
             sdkmanager "platform-tools" "emulator" "system-images;android-30;google_apis;x86_64"
           fi
-
+          mkdir -p "$HOME/.android/avd"
           echo "no" | avdmanager create avd --force -n "$AVD" --package "system-images;android-30;google_apis;x86_64" --device "pixel_2"
-          printf 'hw.cpu.ncore=2\nhw.ramSize=2048M\nhw.heapSize=512M\n' >> "$HOME/.android/avd/$AVD.avd/config.ini"
-
+          AVD_DIR="$HOME/.android/avd/$AVD.avd"
+          test -f "$AVD_DIR/config.ini"
+          printf 'hw.cpu.ncore=2\nhw.ramSize=2048M\nhw.heapSize=512M\n' >> "$AVD_DIR/config.ini"
           ACCEL="off"
           if [ "${KVM_AVAILABLE:-false}" = "true" ]; then ACCEL="on"; fi
           echo "Launching emulator with accel=$ACCEL"
-          nohup "$ANDROID_HOME/emulator/emulator" \
-            -avd "$AVD" \
-            -port 5554 \
-            -no-window -no-audio -no-boot-anim \
-            -gpu swiftshader_indirect -no-snapshot -wipe-data \
-            -accel "$ACCEL" \
-            > "$GITHUB_WORKSPACE/emulator.log" 2>&1 &
+          nohup "$ANDROID_HOME/emulator/emulator" -avd "$AVD" -port 5554 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -wipe-data -accel "$ACCEL" > "$GITHUB_WORKSPACE/emulator.log" 2>&1 &
           EMU_PID=$!
           trap 'adb -s emulator-5554 emu kill >/dev/null 2>&1 || true; kill "$EMU_PID" >/dev/null 2>&1 || true' EXIT
-
           adb start-server >/dev/null
           echo "Waiting for emulator/ADB..."
           BOOT_OK=false
           for i in $(seq 1 420); do
             STATE="$(adb -s emulator-5554 get-state 2>/dev/null || true)"
             BOOT="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-            if [ "$STATE" = "device" ] && [ "$BOOT" = "1" ]; then
-              BOOT_OK=true
-              break
-            fi
+            if [ "$STATE" = "device" ] && [ "$BOOT" = "1" ]; then BOOT_OK=true; break; fi
             if ! kill -0 "$EMU_PID" 2>/dev/null; then
               echo "Emulator process exited unexpectedly."
               tail -200 "$GITHUB_WORKSPACE/emulator.log" || true
@@ -144,26 +134,22 @@ jobs:
           test "$BOOT_OK" = "true"
           test "$(adb -s emulator-5554 get-state)" = "device"
           test "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" = "1"
-
           echo "Installing APK..."
           adb -s emulator-5554 install -r "$APK"
           adb -s emulator-5554 shell pm path "$PACKAGE"
           adb -s emulator-5554 shell monkey -p "$PACKAGE" 1 >/tmp/directvertex-monkey.txt
           sleep 12
-
           echo "Checking running process..."
           adb -s emulator-5554 shell dumpsys package "$PACKAGE" | head -120
           PID="$(adb -s emulator-5554 shell pidof "$PACKAGE" | tr -d '\r' || true)"
           test -n "$PID"
           echo "PID=$PID"
-
           echo "Checking fatal Android exceptions..."
           if adb -s emulator-5554 logcat -d -t 600 | grep -iE "FATAL EXCEPTION|AndroidRuntime" | grep -q .; then
             echo "Fatal Android exception detected."
             adb -s emulator-5554 logcat -d -t 600 | tail -250
             exit 1
           fi
-
           adb -s emulator-5554 exec-out screencap -p > "$GITHUB_WORKSPACE/emulator-screenshot.png"
           test -s "$GITHUB_WORKSPACE/emulator-screenshot.png"
           echo "Gate 2 PASS: emulator booted, APK installed, app launched, process alive, screenshot captured."
