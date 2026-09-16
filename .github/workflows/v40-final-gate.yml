@@ -93,49 +93,80 @@ jobs:
           file "$APK"
           unzip -t "$APK" >/dev/null
       - name: Gate 2 - Android emulator install and launch
-        uses: ReactiveCircus/android-emulator-runner@v2
+        shell: bash
         timeout-minutes: 35
-        with:
-          api-level: 30
-          target: google_apis
-          arch: x86_64
-          profile: pixel_2
-          cores: 2
-          ram-size: 2048M
-          heap-size: 512M
-          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -wipe-data
-          disable-animations: true
-          disable-linux-hw-accel: true
-          emulator-boot-timeout: 1200
-          script: |
-            set -eu
-            APK="$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk"
-            PACKAGE="com.directvertex.v40"
-            test -s "$APK"
-            adb wait-for-device
-            for i in $(seq 1 240); do
-              STATE="$(adb get-state 2>/dev/null || true)"
-              BOOT="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-              if [ "$STATE" = "device" ] && [ "$BOOT" = "1" ]; then break; fi
-              sleep 5
-            done
-            test "$(adb get-state)" = "device"
-            test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1"
-            adb install -r "$APK"
-            adb shell pm path "$PACKAGE"
-            adb shell monkey -p "$PACKAGE" 1
-            sleep 10
-            adb shell dumpsys package "$PACKAGE" | head -100
-            PID="$(adb shell pidof "$PACKAGE" | tr -d '\r' || true)"
-            test -n "$PID"
-            echo "PID=$PID"
-            if adb logcat -d -t 400 | grep -iE "FATAL EXCEPTION|AndroidRuntime" | grep -q .; then
-              echo "Fatal Android exception detected."
-              adb logcat -d -t 400 | tail -200
+        run: |
+          set -euo pipefail
+          APK="$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk"
+          PACKAGE="com.directvertex.v40"
+          AVD="directvertex-v40"
+          test -s "$APK"
+
+          echo "Preparing Android API 30 emulator..."
+          if [ ! -d "$ANDROID_HOME/system-images/android-30/google_apis/x86_64" ]; then
+            yes | sdkmanager --licenses >/dev/null || true
+            sdkmanager "platform-tools" "emulator" "system-images;android-30;google_apis;x86_64"
+          fi
+
+          echo "no" | avdmanager create avd --force -n "$AVD" --package "system-images;android-30;google_apis;x86_64" --device "pixel_2"
+          printf 'hw.cpu.ncore=2\nhw.ramSize=2048M\nhw.heapSize=512M\n' >> "$HOME/.android/avd/$AVD.avd/config.ini"
+
+          ACCEL="off"
+          if [ "${KVM_AVAILABLE:-false}" = "true" ]; then ACCEL="on"; fi
+          echo "Launching emulator with accel=$ACCEL"
+          nohup "$ANDROID_HOME/emulator/emulator" \
+            -avd "$AVD" \
+            -port 5554 \
+            -no-window -no-audio -no-boot-anim \
+            -gpu swiftshader_indirect -no-snapshot -wipe-data \
+            -accel "$ACCEL" \
+            > "$GITHUB_WORKSPACE/emulator.log" 2>&1 &
+          EMU_PID=$!
+          trap 'adb -s emulator-5554 emu kill >/dev/null 2>&1 || true; kill "$EMU_PID" >/dev/null 2>&1 || true' EXIT
+
+          adb start-server >/dev/null
+          echo "Waiting for emulator/ADB..."
+          BOOT_OK=false
+          for i in $(seq 1 420); do
+            STATE="$(adb -s emulator-5554 get-state 2>/dev/null || true)"
+            BOOT="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            if [ "$STATE" = "device" ] && [ "$BOOT" = "1" ]; then
+              BOOT_OK=true
+              break
+            fi
+            if ! kill -0 "$EMU_PID" 2>/dev/null; then
+              echo "Emulator process exited unexpectedly."
+              tail -200 "$GITHUB_WORKSPACE/emulator.log" || true
               exit 1
             fi
-            adb exec-out screencap -p > "$GITHUB_WORKSPACE/emulator-screenshot.png"
-            test -s "$GITHUB_WORKSPACE/emulator-screenshot.png"
+            sleep 2
+          done
+          test "$BOOT_OK" = "true"
+          test "$(adb -s emulator-5554 get-state)" = "device"
+          test "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" = "1"
+
+          echo "Installing APK..."
+          adb -s emulator-5554 install -r "$APK"
+          adb -s emulator-5554 shell pm path "$PACKAGE"
+          adb -s emulator-5554 shell monkey -p "$PACKAGE" 1 >/tmp/directvertex-monkey.txt
+          sleep 12
+
+          echo "Checking running process..."
+          adb -s emulator-5554 shell dumpsys package "$PACKAGE" | head -120
+          PID="$(adb -s emulator-5554 shell pidof "$PACKAGE" | tr -d '\r' || true)"
+          test -n "$PID"
+          echo "PID=$PID"
+
+          echo "Checking fatal Android exceptions..."
+          if adb -s emulator-5554 logcat -d -t 600 | grep -iE "FATAL EXCEPTION|AndroidRuntime" | grep -q .; then
+            echo "Fatal Android exception detected."
+            adb -s emulator-5554 logcat -d -t 600 | tail -250
+            exit 1
+          fi
+
+          adb -s emulator-5554 exec-out screencap -p > "$GITHUB_WORKSPACE/emulator-screenshot.png"
+          test -s "$GITHUB_WORKSPACE/emulator-screenshot.png"
+          echo "Gate 2 PASS: emulator booted, APK installed, app launched, process alive, screenshot captured."
       - name: Gate 3 - Final APK verification report
         shell: bash
         run: |
@@ -143,6 +174,8 @@ jobs:
           APK="app/build/outputs/apk/debug/app-debug.apk"
           SHA="$(sha256sum "$APK" | awk '{print $1}')"
           SIZE="$(stat -c%s "$APK")"
+          test -s "$APK"
+          unzip -t "$APK" >/dev/null
           cat > V40_APK_VERIFIED.txt <<EOF
           DirectVertex V40 APK VERIFIED
           Package: com.directvertex.v40
@@ -153,6 +186,7 @@ jobs:
           Build: Gradle 8.13 / Java 17 / compileSdk 36 / targetSdk 36 / minSdk 23 / Build Tools 35.0.0
           Emulator: API 30 / google_apis / x86_64 / software-compatible verification
           Gates: Gate 1 PASS; Gate 2 PASS; Gate 3 PASS
+          APK ZIP integrity: PASS
           Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
           EOF
           cat V40_APK_VERIFIED.txt
