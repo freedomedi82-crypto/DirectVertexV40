@@ -178,8 +178,36 @@ jobs:
           fi
           test "$(adb -s emulator-5554 get-state)" = "device"
           test "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" = "1"
-          echo "Installing APK..."
-          adb -s emulator-5554 install -r "$APK"
+          echo "Waiting for Android package manager..."
+          PM_READY=false
+          for i in $(seq 1 90); do
+            PM_STATE="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            if [ "$PM_STATE" = "1" ] && adb -s emulator-5554 shell service check package 2>/dev/null | grep -q "found"; then PM_READY=true; break; fi
+            sleep 2
+          done
+          if [ "$PM_READY" != "true" ]; then
+            echo "Android package manager did not become ready."
+            adb -s emulator-5554 shell service check package || true
+            adb -s emulator-5554 logcat -d -t 400 | tail -300 || true
+            exit 1
+          fi
+          echo "Installing APK using push + pm install (avoids streamed-install transport failure)..."
+          adb -s emulator-5554 push "$APK" /data/local/tmp/directvertex-v40.apk
+          INSTALL_OK=false
+          for attempt in 1 2 3; do
+            if adb -s emulator-5554 shell pm install -r -t /data/local/tmp/directvertex-v40.apk; then INSTALL_OK=true; break; fi
+            echo "pm install attempt $attempt failed; refreshing ADB connection..."
+            adb -s emulator-5554 reconnect offline >/dev/null 2>&1 || true
+            sleep 5
+          done
+          if [ "$INSTALL_OK" != "true" ]; then
+            echo "APK installation failed after retries."
+            adb -s emulator-5554 shell service check package || true
+            adb -s emulator-5554 logcat -d -t 600 | tail -350 || true
+            tail -300 "$GITHUB_WORKSPACE/emulator.log" || true
+            exit 1
+          fi
+          adb -s emulator-5554 shell rm -f /data/local/tmp/directvertex-v40.apk || true
           adb -s emulator-5554 shell pm path "$PACKAGE"
           adb -s emulator-5554 shell monkey -p "$PACKAGE" 1 >/tmp/directvertex-monkey.txt
           sleep 12
