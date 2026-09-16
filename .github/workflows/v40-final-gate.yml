@@ -14,8 +14,8 @@ permissions:
 
 jobs:
   build-and-verify:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
 
     steps:
       - name: Checkout repository
@@ -89,7 +89,19 @@ jobs:
             "platforms;android-36" \
             "build-tools;35.0.0" \
             "emulator" \
-            "system-images;android-30;google_apis;x86"
+            "system-images;android-30;google_apis;x86_64"
+
+      - name: Enable KVM acceleration
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+          test -e /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
 
       - name: Static V40 preflight
         shell: bash
@@ -113,39 +125,40 @@ jobs:
 
       - name: Gate 2 - Android emulator install and launch
         uses: ReactiveCircus/android-emulator-runner@v2
-        timeout-minutes: 30
+        timeout-minutes: 25
         with:
           api-level: 30
           target: google_apis
-          arch: x86
+          arch: x86_64
           profile: pixel_2
           cores: 2
-          ram-size: 1536M
-          heap-size: 384M
+          ram-size: 2048M
+          heap-size: 512M
           emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -wipe-data
           disable-animations: true
-          disable-linux-hw-accel: true
-          emulator-boot-timeout: 1800
+          disable-linux-hw-accel: false
+          emulator-boot-timeout: 600
           script: |
             set -euo pipefail
             APK="app/build/outputs/apk/debug/app-debug.apk"
             PACKAGE="com.directvertex.v40"
             test -s "$APK"
             adb wait-for-device
-            for i in $(seq 1 180); do
+            for i in $(seq 1 120); do
               STATE="$(adb get-state 2>/dev/null || true)"
               BOOT="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
               if [ "$STATE" = "device" ] && [ "$BOOT" = "1" ]; then
                 break
               fi
-              sleep 10
+              sleep 5
             done
             test "$(adb get-state)" = "device"
             test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1"
             adb install -r "$APK"
+            echo "Installed package:"
             adb shell pm path "$PACKAGE"
             adb shell monkey -p "$PACKAGE" 1
-            sleep 10
+            sleep 8
             echo "Package information:"
             adb shell dumpsys package "$PACKAGE" | head -100
             echo "Running process check:"
@@ -153,7 +166,7 @@ jobs:
             test -n "$PID"
             echo "PID=$PID"
             echo "Recent app logcat:"
-            adb logcat -d -t 300 | grep -iE "com.directvertex.v40|FATAL EXCEPTION|AndroidRuntime" | tail -120 || true
+            adb logcat -d -t 400 | grep -iE "com.directvertex.v40|FATAL EXCEPTION|AndroidRuntime" | tail -160 || true
             echo "Capturing emulator screenshot:"
             adb exec-out screencap -p > emulator-screenshot.png
             test -s emulator-screenshot.png
@@ -185,7 +198,8 @@ jobs:
           Emulator:
           API: 30
           Target: google_apis
-          Architecture: x86
+          Architecture: x86_64
+          KVM: enabled
 
           Gates:
           Gate 1 = APK build and integrity PASS
