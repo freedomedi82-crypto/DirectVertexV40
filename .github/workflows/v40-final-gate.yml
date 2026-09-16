@@ -107,7 +107,17 @@ jobs:
             sdkmanager "platform-tools" "emulator" "system-images;android-30;google_apis;x86_64"
           fi
           mkdir -p "$HOME/.android/avd"
-          echo "no" | avdmanager create avd --force -n "$AVD" --package "system-images;android-30;google_apis;x86_64"
+          rm -rf "$HOME/.android/avd/$AVD.avd" "$HOME/.android/avd/$AVD.ini"
+          set +e
+          AVD_OUTPUT="$(printf 'no\n' | avdmanager create avd --force -n "$AVD" --package "system-images;android-30;google_apis;x86_64" 2>&1)"
+          AVD_RC=$?
+          set -e
+          printf '%s\n' "$AVD_OUTPUT"
+          if [ "$AVD_RC" -ne 0 ] || [ ! -f "$HOME/.android/avd/$AVD.avd/config.ini" ]; then
+            echo "Primary AVD creation failed (rc=$AVD_RC); retrying with explicit Pixel_2 device profile."
+            rm -rf "$HOME/.android/avd/$AVD.avd" "$HOME/.android/avd/$AVD.ini"
+            printf 'no\n' | avdmanager create avd --force -n "$AVD" --package "system-images;android-30;google_apis;x86_64" --device "pixel_2"
+          fi
           AVD_DIR="$HOME/.android/avd/$AVD.avd"
           test -f "$AVD_DIR/config.ini"
           printf 'hw.cpu.ncore=2\nhw.ramSize=2048M\nhw.heapSize=512M\n' >> "$AVD_DIR/config.ini"
